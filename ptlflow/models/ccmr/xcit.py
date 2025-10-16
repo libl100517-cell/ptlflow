@@ -12,8 +12,7 @@ import math
 from functools import partial
 import torch
 import torch.nn as nn
-from timm.models.vision_transformer import Mlp
-from timm.models.layers import DropPath, trunc_normal_, to_2tuple
+from timm.layers import DropPath, trunc_normal_, to_2tuple
 
 """ MLP module w/ dropout and configurable activation layer
 Hacked together by / Copyright 2020 Ross Wightman

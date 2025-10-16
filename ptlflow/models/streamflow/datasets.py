@@ -399,6 +399,8 @@ def fetch_dataloader(args, TRAIN_DS="C+T+K+S+H"):
         shuffle=True,
         num_workers=8,
         drop_last=True,
+        persistent_workers=True,  # 关键：持久化 worker
+        prefetch_factor=2
     )
 
     print("Training with %d image pairs" % len(train_dataset))

@@ -119,6 +119,9 @@ class ToTensor(object):
         valid_keys = _get_valid_keys(inputs.keys(), self.use_keys, self.ignore_keys)
         for k in valid_keys:
             v = inputs[k]
+            if isinstance(v, dict):
+                # Skip metadata entries that are not tensor-like.
+                continue
             if isinstance(v, list) or isinstance(v, tuple):
                 v = np.stack(v)
                 if len(v.shape) == 3:

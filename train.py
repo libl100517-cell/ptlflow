@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 import sys
 
-from jsonargparse import ArgumentParser
+from jsonargparse import ArgumentParser, Namespace
 from loguru import logger
 
 from ptlflow.data.flow_datamodule import FlowDataModule
@@ -49,6 +49,32 @@ def _init_parser():
     return parser
 
 
+def _promote_optimizer_fields(cfg: Namespace) -> None:
+    """Map optimizer init args to the legacy flat CLI flags when present."""
+    optimizer_cfg = getattr(cfg, "optimizer", None)
+    if optimizer_cfg is None:
+        return
+
+    init_args = getattr(optimizer_cfg, "init_args", None)
+    if init_args is None:
+        return
+
+    if isinstance(init_args, Namespace):
+        init_args_dict = init_args.as_dict()
+    elif isinstance(init_args, dict):
+        init_args_dict = init_args
+    else:
+        init_args_dict = {}
+
+    if not isinstance(init_args_dict, dict):
+        return
+
+    cfg.lr = cfg.lr if cfg.lr is not None else init_args_dict.get("lr")
+    cfg.wdecay = (
+        cfg.wdecay if cfg.wdecay is not None else init_args_dict.get("weight_decay")
+    )
+
+
 def cli_main():
     parser = _init_parser()
 
@@ -62,6 +88,8 @@ def cli_main():
         run=False,
         parse_only=True,
     ).config
+
+    _promote_optimizer_fields(cfg)
 
     model_name = cfg.model.class_path.split(".")[-1]
 
@@ -158,8 +186,18 @@ def cli_main():
 
     cfg.trainer.logger = trainer_logger
     cfg.trainer.callbacks = callbacks
-    cfg.model.init_args.lr = cfg.lr
-    cfg.model.init_args.wdecay = cfg.wdecay
+    model_init_args = getattr(cfg.model, "init_args", None)
+    if model_init_args is not None:
+        if isinstance(model_init_args, Namespace):
+            if cfg.lr is not None:
+                model_init_args.lr = cfg.lr
+            if cfg.wdecay is not None:
+                model_init_args.wdecay = cfg.wdecay
+        elif isinstance(model_init_args, dict):
+            if cfg.lr is not None:
+                model_init_args["lr"] = cfg.lr
+            if cfg.wdecay is not None:
+                model_init_args["wdecay"] = cfg.wdecay
     cli = PTLFlowCLI(
         model_class=RegisteredModel,
         subclass_mode_model=True,

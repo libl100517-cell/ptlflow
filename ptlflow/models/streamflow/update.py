@@ -592,7 +592,7 @@ class SKUpdateBlock6_Deep_nopoolres_AllDecoder(nn.Module):
 
 
 from timm.models.vision_transformer import Attention as timm_attn
-from timm.models.layers import DropPath, Mlp
+from timm.layers import DropPath, Mlp
 
 
 def zero_module(module):
