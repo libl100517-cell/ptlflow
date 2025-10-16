@@ -53,6 +53,10 @@ python train.py \
   --trainer.devices 1
 ```
 
+When you mirror these flags inside a YAML config, list the datamodule arguments directly under `data:`—the CLI already binds
+`FlowDataModule`, so adding nested `class_path`/`init_args` keys (as you might for other Lightning projects) will trigger a
+`Validation failed: Group 'data' does not accept nested key ...` error.【F:configs/skeleton_raft_debug.yaml†L1-L35】
+
 Key flags to tune:
 - `--model.input_channels`: match it to the number of channels emitted by `CrackSkeletonDataset` (2 for `[S, D]`, 4 for `[S, D, Tsin, Tcos]`, 6 if branch cues are appended).【F:ptlflow/data/crack_skeleton_dataset.py†L102-L156】
 - `--model.iters`: number of RAFT refinements per forward pass.【F:ptlflow/models/skeleton_raft/skeleton_raft.py†L333-L451】
@@ -83,6 +87,6 @@ Set `--trainer.limit_train_batches 0` to skip further optimization when only val
 
 ### Debugging from VS Code
 
-If you prefer launching training from VS Code's debugger, load the ready-made configuration file at `configs/skeleton_raft_debug.yaml`. It mirrors the command-line example above and already references the Windows dataset paths for both splits. Point your VS Code debug configuration at `train.py` and pass `--config configs/skeleton_raft_debug.yaml` as the program arguments to reproduce the same run without manually retyping flags.【F:configs/skeleton_raft_debug.yaml†L1-L47】【F:ptlflow/data/flow_datamodule.py†L668-L752】
+If you prefer launching training from VS Code's debugger, load the ready-made configuration file at `configs/skeleton_raft_debug.yaml`. It mirrors the command-line example above and already references the Windows dataset paths for both splits. Point your VS Code debug configuration at `train.py` and pass `--config configs/skeleton_raft_debug.yaml` as the program arguments to reproduce the same run without manually retyping flags.【F:configs/skeleton_raft_debug.yaml†L1-L35】【F:ptlflow/data/flow_datamodule.py†L668-L752】
 
 With these steps you can fine-tune the skeleton-aware RAFT on your crack imagery and iterate on loss or augmentation choices without editing the core code.

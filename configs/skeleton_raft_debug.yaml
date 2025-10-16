@@ -21,14 +21,12 @@ optimizer:
     lr: 0.001
     weight_decay: 0.01
 data:
-  class_path: ptlflow.data.flow_datamodule.FlowDataModule
-  init_args:
-    train_dataset: crack
-    val_dataset: crack
-    train_batch_size: 2
-    train_num_workers: 4
-    crack_train_root_dir: "D:/GitHub/RPMNet-master/change_dataset/train"
-    crack_val_root_dir: "D:/GitHub/RPMNet-master/change_dataset/val"
+  train_dataset: crack
+  val_dataset: crack
+  train_batch_size: 2
+  train_num_workers: 4
+  crack_train_root_dir: "D:/GitHub/RPMNet-master/change_dataset/train"
+  crack_val_root_dir: "D:/GitHub/RPMNet-master/change_dataset/val"
 trainer:
   max_epochs: 20
   accelerator: gpu
