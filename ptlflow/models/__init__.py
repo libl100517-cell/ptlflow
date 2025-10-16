@@ -30,6 +30,7 @@ from .raft import *
 from .rapidflow import *
 from .rpknet import *
 from .sea_raft import *
+from .skeleton_raft import *
 from .scopeflow import *
 from .scv.scv import *
 from .separableflow import *
