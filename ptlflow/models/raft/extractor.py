@@ -120,7 +120,13 @@ class BottleneckBlock(nn.Module):
 
 
 class BasicEncoder(nn.Module):
-    def __init__(self, output_dim=128, norm_fn="batch", dropout=0.0):
+    def __init__(
+        self,
+        output_dim=128,
+        norm_fn="batch",
+        dropout=0.0,
+        in_channels: int = 3,
+    ):
         super(BasicEncoder, self).__init__()
         self.norm_fn = norm_fn
 
@@ -136,7 +142,9 @@ class BasicEncoder(nn.Module):
         elif self.norm_fn == "none":
             self.norm1 = nn.Sequential()
 
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3)
+        self.conv1 = nn.Conv2d(
+            in_channels, 64, kernel_size=7, stride=2, padding=3
+        )
         self.relu1 = nn.ReLU(inplace=True)
 
         self.in_planes = 64
@@ -195,7 +203,13 @@ class BasicEncoder(nn.Module):
 
 
 class SmallEncoder(nn.Module):
-    def __init__(self, output_dim=128, norm_fn="batch", dropout=0.0):
+    def __init__(
+        self,
+        output_dim=128,
+        norm_fn="batch",
+        dropout=0.0,
+        in_channels: int = 3,
+    ):
         super(SmallEncoder, self).__init__()
         self.norm_fn = norm_fn
 
@@ -211,7 +225,9 @@ class SmallEncoder(nn.Module):
         elif self.norm_fn == "none":
             self.norm1 = nn.Sequential()
 
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=7, stride=2, padding=3)
+        self.conv1 = nn.Conv2d(
+            in_channels, 32, kernel_size=7, stride=2, padding=3
+        )
         self.relu1 = nn.ReLU(inplace=True)
 
         self.in_planes = 32
