@@ -62,6 +62,7 @@ class RAFT(BaseModel):
         max_flow: float = 400,
         iters: int = 32,
         alternate_corr: bool = False,
+        image_channels: int = 3,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -75,14 +76,23 @@ class RAFT(BaseModel):
         self.max_flow = max_flow
         self.iters = iters
         self.alternate_corr = alternate_corr
+        self.image_channels = image_channels
 
         self.hidden_dim = hdim = 128
         self.context_dim = cdim = 128
 
         # feature network, context network, and update block
-        self.fnet = BasicEncoder(output_dim=256, norm_fn="instance", dropout=dropout)
+        self.fnet = BasicEncoder(
+            output_dim=256,
+            norm_fn="instance",
+            dropout=dropout,
+            in_channels=image_channels,
+        )
         self.cnet = BasicEncoder(
-            output_dim=hdim + cdim, norm_fn="batch", dropout=dropout
+            output_dim=hdim + cdim,
+            norm_fn="batch",
+            dropout=dropout,
+            in_channels=image_channels,
         )
         self.update_block = BasicUpdateBlock(
             self.corr_levels, self.corr_radius, hidden_dim=hdim
@@ -208,6 +218,7 @@ class RAFTSmall(RAFT):
         max_flow: float = 400,
         iters: int = 32,
         alternate_corr: bool = False,
+        image_channels: int = 3,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -218,6 +229,7 @@ class RAFTSmall(RAFT):
             max_flow=max_flow,
             iters=iters,
             alternate_corr=alternate_corr,
+            image_channels=image_channels,
             **kwargs,
         )
         self.hidden_dim = hdim = 96
@@ -225,10 +237,16 @@ class RAFTSmall(RAFT):
 
         # feature network, context network, and update block
         self.fnet = SmallEncoder(
-            output_dim=128, norm_fn="instance", dropout=self.dropout
+            output_dim=128,
+            norm_fn="instance",
+            dropout=self.dropout,
+            in_channels=image_channels,
         )
         self.cnet = SmallEncoder(
-            output_dim=hdim + cdim, norm_fn="none", dropout=self.dropout
+            output_dim=hdim + cdim,
+            norm_fn="none",
+            dropout=self.dropout,
+            in_channels=image_channels,
         )
         self.update_block = SmallUpdateBlock(corr_levels, corr_radius, hidden_dim=hdim)
 

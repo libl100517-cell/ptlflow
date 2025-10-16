@@ -164,6 +164,10 @@ You can see a table with main evaluation results of the available models [here](
 
 Please take a look at the [documentation](https://ptlflow.readthedocs.io/) to learn how to install and use PTLFlow.
 
+If you are experimenting with the crack correspondence pipeline, check the dedicated
+[skeleton_raft training guide](docs/skeleton_raft_training.md) for dataset preparation and CLI
+examples.
+
 You can also check the notebooks below running on Google Colab for some practical examples:
 
 - [Inference with a pretrained model](https://colab.research.google.com/drive/1_WXvIRweQJgex0X-HS0LFXBb0IWZIvR4?usp=sharing).
