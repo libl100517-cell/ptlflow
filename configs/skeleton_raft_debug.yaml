@@ -1,0 +1,37 @@
+# VS Code-friendly configuration for skeleton_raft crack training
+lr: 0.001
+wdecay: 0.01
+project: ptlflow
+logger: tensorboard
+log_dir: ptlflow_logs
+train_ckpt_topk: 0
+infer_ckpt_topk: 1
+infer_ckpt_metric: main_val_metric
+model:
+  class_path: skeleton_raft
+  init_args:
+    input_channels: 4
+    iters: 12
+    use_tangent_loss: true
+    use_distance_loss: true
+    use_skeleton_loss: true
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 0.001
+    weight_decay: 0.01
+data:
+  class_path: ptlflow.data.flow_datamodule.FlowDataModule
+  init_args:
+    train_dataset: crack
+    val_dataset: crack
+    train_batch_size: 2
+    train_num_workers: 4
+    crack_train_root_dir: "D:/GitHub/RPMNet-master/change_dataset/train"
+    crack_val_root_dir: "D:/GitHub/RPMNet-master/change_dataset/val"
+trainer:
+  max_epochs: 20
+  accelerator: gpu
+  devices: 1
+  log_every_n_steps: 25
+  check_val_every_n_epoch: 1

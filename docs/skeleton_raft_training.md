@@ -14,18 +14,21 @@ This guide describes the end-to-end steps required to train the `skeleton_raft` 
 
 ## 2. Point the datamodule to your dataset
 
-Update `datasets.yaml` so that the `crack` entry points to the absolute path of your dataset root (quotes are required for Windows drive letters):
+Update `datasets.yaml` so that the `crack` entry points to the absolute paths of your training and validation directories (quotes are required for Windows drive letters):
 ```yaml
 autoflow: /path/to/autoflow
 ...
-crack: "D:/GitHub/RPMNet-master/change_dataset/train"
-```【F:datasets.yaml†L1-L13】
+crack:
+  train: "D:/GitHub/RPMNet-master/change_dataset/train"
+  val: "D:/GitHub/RPMNet-master/change_dataset/val"
+```
+【F:datasets.yaml†L1-L13】
 
-Alternatively, override `--data.crack_root_dir` on the command line (see below).
+At runtime you can still override these with `--data.crack_root_dir`, `--data.crack_train_root_dir`, `--data.crack_val_root_dir`, or by adding `root=` arguments directly to the dataset specifier.【F:ptlflow/data/flow_datamodule.py†L57-L90】【F:ptlflow/data/flow_datamodule.py†L706-L752】
 
 ## 3. Choose training and validation splits
 
-The crack datamodule wrapper exposes a single dataset ID `crack`. When it is selected for training (`--data.train_dataset crack`) the loader uses the `train` split, applies tensor conversion plus optional flips, and enables the synthetic deformation pipeline. During validation (`--data.val_dataset crack`) it switches to the `val` split, disables the random deformations, and simply encodes each mask once for deterministic evaluation.【F:ptlflow/data/flow_datamodule.py†L668-L742】【F:ptlflow/data/crack_skeleton_dataset.py†L118-L168】 Use separate dataset roots (or different `pairs.txt` files) if you need disjoint splits.
+The crack datamodule wrapper exposes a single dataset ID `crack`. When it is selected for training (`--data.train_dataset crack`) the loader uses the `train` split, applies tensor conversion plus optional flips, and enables the synthetic deformation pipeline. During validation (`--data.val_dataset crack`) it switches to the `val` split, disables the random deformations, and simply encodes each mask once for deterministic evaluation.【F:ptlflow/data/flow_datamodule.py†L668-L752】【F:ptlflow/data/crack_skeleton_dataset.py†L118-L168】 Use the new `crack.train` / `crack.val` entries or the CLI overrides above to map each split to a different directory.
 
 ## 4. Launch training
 
@@ -77,5 +80,9 @@ python train.py \
 ```
 
 Set `--trainer.limit_train_batches 0` to skip further optimization when only validating. Adjust `--data.predict_dataset` or `--data.test_dataset` analogously for other stages.
+
+### Debugging from VS Code
+
+If you prefer launching training from VS Code's debugger, load the ready-made configuration file at `configs/skeleton_raft_debug.yaml`. It mirrors the command-line example above and already references the Windows dataset paths for both splits. Point your VS Code debug configuration at `train.py` and pass `--config configs/skeleton_raft_debug.yaml` as the program arguments to reproduce the same run without manually retyping flags.【F:configs/skeleton_raft_debug.yaml†L1-L47】【F:ptlflow/data/flow_datamodule.py†L668-L752】
 
 With these steps you can fine-tune the skeleton-aware RAFT on your crack imagery and iterate on loss or augmentation choices without editing the core code.

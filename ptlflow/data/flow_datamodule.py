@@ -66,6 +66,8 @@ class FlowDataModule(pl.LightningDataModule):
         spring_root_dir: Optional[str] = None,
         kubric_root_dir: Optional[str] = None,
         crack_root_dir: Optional[str] = None,
+        crack_train_root_dir: Optional[str] = None,
+        crack_val_root_dir: Optional[str] = None,
         middlebury_st_root_dir: Optional[str] = None,
         viper_root_dir: Optional[str] = None,
         dataset_config_path: str = "./datasets.yaml",
@@ -94,6 +96,8 @@ class FlowDataModule(pl.LightningDataModule):
         self.spring_root_dir = spring_root_dir
         self.kubric_root_dir = kubric_root_dir
         self.crack_root_dir = crack_root_dir
+        self.crack_train_root_dir = crack_train_root_dir
+        self.crack_val_root_dir = crack_val_root_dir
         self.middlebury_st_root_dir = middlebury_st_root_dir
         self.viper_root_dir = viper_root_dir
         self.dataset_config_path = dataset_config_path
@@ -251,8 +255,18 @@ class FlowDataModule(pl.LightningDataModule):
         with open(self.dataset_config_path, "r") as f:
             dataset_paths = yaml.safe_load(f)
         for name, path in dataset_paths.items():
-            if getattr(self, f"{name}_root_dir") is None:
-                setattr(self, f"{name}_root_dir", path)
+            if isinstance(path, dict):
+                for split_name, split_path in path.items():
+                    if split_name == "root":
+                        attr_name = f"{name}_root_dir"
+                    else:
+                        attr_name = f"{name}_{split_name}_root_dir"
+                    if hasattr(self, attr_name) and getattr(self, attr_name) is None:
+                        setattr(self, attr_name, split_path)
+            else:
+                attr_name = f"{name}_root_dir"
+                if hasattr(self, attr_name) and getattr(self, attr_name) is None:
+                    setattr(self, attr_name, path)
 
     def _parse_dataset_selection(
         self,
@@ -714,6 +728,7 @@ class FlowDataModule(pl.LightningDataModule):
         elastic_sigma = 4.0
         width_jitter_radius = 1
         noise_flip_prob = 0.01
+        root_override = None
 
         for v in args:
             if v == "nodist":
@@ -750,11 +765,29 @@ class FlowDataModule(pl.LightningDataModule):
                 width_jitter_radius = int(v.split("=", 1)[1])
             elif v.startswith("noise="):
                 noise_flip_prob = float(v.split("=", 1)[1])
+            elif v.startswith("root="):
+                root_override = v.split("=", 1)[1]
             else:
                 raise ValueError(f"Invalid arg: {v}")
 
+        if root_override is not None:
+            root_dir = root_override
+        elif is_train and self.crack_train_root_dir is not None:
+            root_dir = self.crack_train_root_dir
+        elif (not is_train) and self.crack_val_root_dir is not None:
+            root_dir = self.crack_val_root_dir
+        else:
+            root_dir = self.crack_root_dir
+
+        if root_dir is None:
+            raise ValueError(
+                "Crack dataset root is undefined. Provide --data.crack_root_dir, "
+                "--data.crack_train_root_dir, --data.crack_val_root_dir, a datasets.yaml entry, or a "
+                "crack-specific root= argument."
+            )
+
         dataset = CrackSkeletonDataset(
-            self.crack_root_dir,
+            root_dir,
             pairs_file=pairs_file,
             transform=transform,
             split="train" if is_train else "val",
