@@ -361,7 +361,7 @@ class LoggerCallback(Callback):
                 img = img[0]
 
                 if "images" in name:
-                    img = img.flip([0])  # BGR to RGB
+                    img = self._prepare_image_visualization(img)
                 elif "flows" in name:
                     img = flow_utils.flow_to_rgb(img)
 
@@ -414,6 +414,39 @@ class LoggerCallback(Callback):
         else:
             max_range = int(limit_batches * dataloader_length) - 1
         return max_range
+
+    @staticmethod
+    def _minmax_normalize(image: torch.Tensor) -> torch.Tensor:
+        min_val = image.amin(dim=(-2, -1), keepdim=True)
+        max_val = image.amax(dim=(-2, -1), keepdim=True)
+        denom = torch.where(
+            (max_val - min_val) > 1e-6,
+            max_val - min_val,
+            torch.ones_like(max_val),
+        )
+        normalized = (image - min_val) / denom
+        return torch.clamp(normalized, 0.0, 1.0)
+
+    def _prepare_image_visualization(self, image: torch.Tensor) -> torch.Tensor:
+        channels = image.shape[0]
+        if channels == 0:
+            return image
+
+        if channels == 3:
+            return image.flip([0])
+
+        viz = image.clone()
+        if channels > 3:
+            viz = viz[:3]
+
+        viz = self._minmax_normalize(viz)
+
+        if viz.shape[0] == 1:
+            viz = viz.repeat(3, 1, 1)
+        elif viz.shape[0] == 2:
+            viz = torch.cat([viz, viz[:1]], dim=0)
+
+        return viz
 
     def _make_image_grid(
         self, dl_images: Dict[str, List[torch.Tensor]]

@@ -41,6 +41,14 @@ class CrackSkeletonDataset(Dataset):
         elastic_sigma: float = 4.0,
         width_jitter_radius: int = 1,
         noise_flip_prob: float = 0.01,
+        skeleton_patch_size: Optional[int] = 256,
+        skeleton_transform_rotation: float = 5.0,
+        skeleton_transform_scale: float = 0.05,
+        skeleton_transform_translation: float = 6.0,
+        skeleton_occlusion_prob: float = 0.5,
+        skeleton_occlusion_count: Tuple[int, int] = (0, 3),
+        skeleton_occlusion_radius: Tuple[float, float] = (12.0, 48.0),
+        skeleton_noise_std: float = 1.0,
     ) -> None:
         super().__init__()
         self.root_dir = Path(root_dir)
@@ -66,7 +74,24 @@ class CrackSkeletonDataset(Dataset):
         self.width_jitter_radius = max(0, int(width_jitter_radius))
         self.noise_flip_prob = min(1.0, max(0.0, noise_flip_prob))
 
+        self.use_patch_sampling = skeleton_patch_size is not None and int(skeleton_patch_size) > 0
+        self.skeleton_patch_size = int(skeleton_patch_size) if self.use_patch_sampling else None
+        self.skeleton_transform_rotation = float(abs(skeleton_transform_rotation))
+        self.skeleton_transform_scale = max(0.0, float(skeleton_transform_scale))
+        self.skeleton_transform_translation = max(0.0, float(skeleton_transform_translation))
+        self.skeleton_occlusion_prob = min(1.0, max(0.0, float(skeleton_occlusion_prob)))
+        occ_lo, occ_hi = skeleton_occlusion_count
+        occ_lo = max(0, int(occ_lo))
+        occ_hi = max(occ_lo, int(occ_hi))
+        self.skeleton_occlusion_count: Tuple[int, int] = (occ_lo, occ_hi)
+        rad_lo, rad_hi = skeleton_occlusion_radius
+        rad_lo = max(1.0, float(rad_lo))
+        rad_hi = max(rad_lo, float(rad_hi))
+        self.skeleton_occlusion_radius: Tuple[float, float] = (rad_lo, rad_hi)
+        self.skeleton_noise_std = max(0.0, float(skeleton_noise_std))
+
         self._rng = np.random.default_rng(rng_seed)
+        self._patch_center_sample_attempts = 8
 
         self._paired_mode = False
         self.samples: List[Tuple[Path, Path]] = []
@@ -135,8 +160,17 @@ class CrackSkeletonDataset(Dataset):
                 base_mask_1 = base_mask.copy()
                 base_mask_2 = base_mask.copy()
 
-        mask1 = base_mask_1
-        mask2 = base_mask_2
+        if self.use_patch_sampling:
+            pair_rng = self._spawn_rng()
+            mask1, mask2 = self._generate_skeleton_patch_pair(
+                base_mask_1,
+                base_mask_2,
+                pair_rng,
+                apply_random=self.split.lower() == "train",
+            )
+        else:
+            mask1 = base_mask_1
+            mask2 = base_mask_2
 
         sample1 = self._encode_mask(mask1)
         sample2 = self._encode_mask(mask2)
@@ -332,6 +366,175 @@ class CrackSkeletonDataset(Dataset):
     def _spawn_rng(self) -> np.random.Generator:
         seed = int(self._rng.integers(0, 2**31 - 1))
         return np.random.default_rng(seed)
+
+    def _generate_skeleton_patch_pair(
+        self,
+        mask1: np.ndarray,
+        mask2: np.ndarray,
+        rng: np.random.Generator,
+        apply_random: bool = True,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if self.skeleton_patch_size is None:
+            return mask1, mask2
+
+        skeleton_full = self._skeletonize(mask1)
+        center_y = None
+        center_x = None
+        patch1: Optional[np.ndarray] = None
+        skel1: Optional[np.ndarray] = None
+
+        for _ in range(self._patch_center_sample_attempts):
+            candidate_y, candidate_x = self._sample_skeleton_center(skeleton_full, rng)
+            candidate_patch = self._crop_patch_with_padding(
+                mask1, candidate_y, candidate_x, self.skeleton_patch_size
+            )
+            candidate_skeleton = self._skeletonize(candidate_patch)
+
+            if patch1 is None:
+                center_y, center_x = candidate_y, candidate_x
+                patch1 = candidate_patch
+                skel1 = candidate_skeleton
+
+            if np.count_nonzero(candidate_skeleton) > 0:
+                center_y, center_x = candidate_y, candidate_x
+                patch1 = candidate_patch
+                skel1 = candidate_skeleton
+                break
+
+        if patch1 is None or skel1 is None:
+            center_y = mask1.shape[0] // 2
+            center_x = mask1.shape[1] // 2
+            patch1 = self._crop_patch_with_padding(mask1, center_y, center_x, self.skeleton_patch_size)
+            skel1 = self._skeletonize(patch1)
+
+        patch2 = self._crop_patch_with_padding(mask2, center_y, center_x, self.skeleton_patch_size)
+        skel2 = self._skeletonize(patch2)
+
+        if apply_random and (self.skeleton_transform_rotation > 0 or self.skeleton_transform_scale > 0 or self.skeleton_transform_translation > 0):
+            skel2 = self._apply_affine_to_skeleton(skel2, rng)
+
+        if apply_random and self.skeleton_occlusion_prob > 0 and rng.random() < self.skeleton_occlusion_prob:
+            target = rng.integers(0, 2)
+            if target == 0:
+                skel1 = self._apply_random_occlusions(skel1, rng)
+            else:
+                skel2 = self._apply_random_occlusions(skel2, rng)
+
+        if self.skeleton_noise_std > 0:
+            skel1 = self._jitter_skeleton_points(skel1, rng, apply_random)
+            skel2 = self._jitter_skeleton_points(skel2, rng, apply_random)
+
+        return skel1.astype(np.uint8), skel2.astype(np.uint8)
+
+    def _sample_skeleton_center(
+        self, skeleton: np.ndarray, rng: np.random.Generator
+    ) -> Tuple[int, int]:
+        coords = np.argwhere(skeleton > 0)
+        if coords.size == 0:
+            h, w = skeleton.shape
+            return int(h // 2), int(w // 2)
+        idx = int(rng.integers(0, coords.shape[0]))
+        y, x = coords[idx]
+        return int(y), int(x)
+
+    def _crop_patch_with_padding(
+        self, mask: np.ndarray, center_y: int, center_x: int, size: int
+    ) -> np.ndarray:
+        if size <= 0:
+            return mask.copy()
+        half = size // 2
+        h, w = mask.shape[:2]
+        y0 = center_y - half
+        x0 = center_x - half
+        y1 = y0 + size
+        x1 = x0 + size
+
+        pad_top = max(0, -y0)
+        pad_left = max(0, -x0)
+        pad_bottom = max(0, y1 - h)
+        pad_right = max(0, x1 - w)
+
+        pad_width = ((pad_top, pad_bottom), (pad_left, pad_right))
+        mask_padded = np.pad(mask, pad_width, mode="constant", constant_values=0)
+
+        y0 += pad_top
+        y1 += pad_top
+        x0 += pad_left
+        x1 += pad_left
+
+        cropped = mask_padded[y0:y1, x0:x1]
+        if cropped.shape[0] != size or cropped.shape[1] != size:
+            cropped = cv.resize(cropped, (size, size), interpolation=cv.INTER_NEAREST)
+        return (cropped > 0).astype(np.uint8)
+
+    def _apply_affine_to_skeleton(
+        self, skeleton: np.ndarray, rng: np.random.Generator
+    ) -> np.ndarray:
+        if skeleton.size == 0 or np.count_nonzero(skeleton) == 0:
+            return skeleton
+        angle = rng.uniform(-self.skeleton_transform_rotation, self.skeleton_transform_rotation)
+        scale = rng.uniform(1.0 - self.skeleton_transform_scale, 1.0 + self.skeleton_transform_scale)
+        tx = rng.uniform(-self.skeleton_transform_translation, self.skeleton_transform_translation)
+        ty = rng.uniform(-self.skeleton_transform_translation, self.skeleton_transform_translation)
+
+        h, w = skeleton.shape
+        center = (w / 2.0, h / 2.0)
+        matrix = cv.getRotationMatrix2D(center, angle, scale)
+        matrix[0, 2] += tx
+        matrix[1, 2] += ty
+
+        warped = cv.warpAffine(
+            skeleton.astype(np.float32),
+            matrix,
+            (w, h),
+            flags=cv.INTER_NEAREST,
+            borderMode=cv.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        return (warped > 0.5).astype(np.uint8)
+
+    def _apply_random_occlusions(
+        self, skeleton: np.ndarray, rng: np.random.Generator
+    ) -> np.ndarray:
+        low, high = self.skeleton_occlusion_count
+        if high <= 0:
+            return skeleton
+        count = int(rng.integers(low, high + 1)) if high > low else int(high)
+        if count <= 0:
+            return skeleton
+
+        occluded = skeleton.copy()
+        h, w = skeleton.shape
+        r_min, r_max = self.skeleton_occlusion_radius
+        for _ in range(count):
+            cy = float(rng.uniform(0, h))
+            cx = float(rng.uniform(0, w))
+            radius = float(rng.uniform(r_min, r_max))
+            radius = float(np.clip(radius, 1.0, max(h, w)))
+            cv.circle(occluded, (int(round(cx)), int(round(cy))), int(round(radius)), 0, thickness=-1)
+
+        if np.count_nonzero(occluded) == 0:
+            return skeleton
+        return occluded.astype(np.uint8)
+
+    def _jitter_skeleton_points(
+        self, skeleton: np.ndarray, rng: np.random.Generator, apply_random: bool
+    ) -> np.ndarray:
+        if not apply_random or self.skeleton_noise_std <= 0:
+            return skeleton.astype(np.uint8)
+        coords = np.argwhere(skeleton > 0)
+        if coords.shape[0] == 0:
+            return skeleton.astype(np.uint8)
+        noise = rng.normal(0.0, self.skeleton_noise_std, size=coords.shape)
+        jittered = coords.astype(np.float32) + noise.astype(np.float32)
+        jittered = np.round(jittered).astype(int)
+        h, w = skeleton.shape
+        jittered[:, 0] = np.clip(jittered[:, 0], 0, h - 1)
+        jittered[:, 1] = np.clip(jittered[:, 1], 0, w - 1)
+        jitter_mask = np.zeros_like(skeleton, dtype=np.uint8)
+        jitter_mask[jittered[:, 0], jittered[:, 1]] = 1
+        combined = np.maximum(skeleton.astype(np.uint8), jitter_mask)
+        return combined
 
     def _skeletonize(self, mask: np.ndarray) -> np.ndarray:
         skeleton = np.zeros_like(mask)
