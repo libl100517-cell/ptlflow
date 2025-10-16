@@ -91,6 +91,7 @@ class CrackSkeletonDataset(Dataset):
         self.skeleton_noise_std = max(0.0, float(skeleton_noise_std))
 
         self._rng = np.random.default_rng(rng_seed)
+        self._patch_center_sample_attempts = 8
 
         self._paired_mode = False
         self.samples: List[Tuple[Path, Path]] = []
@@ -377,12 +378,36 @@ class CrackSkeletonDataset(Dataset):
             return mask1, mask2
 
         skeleton_full = self._skeletonize(mask1)
-        center_y, center_x = self._sample_skeleton_center(skeleton_full, rng)
+        center_y = None
+        center_x = None
+        patch1: Optional[np.ndarray] = None
+        skel1: Optional[np.ndarray] = None
 
-        patch1 = self._crop_patch_with_padding(mask1, center_y, center_x, self.skeleton_patch_size)
+        for _ in range(self._patch_center_sample_attempts):
+            candidate_y, candidate_x = self._sample_skeleton_center(skeleton_full, rng)
+            candidate_patch = self._crop_patch_with_padding(
+                mask1, candidate_y, candidate_x, self.skeleton_patch_size
+            )
+            candidate_skeleton = self._skeletonize(candidate_patch)
+
+            if patch1 is None:
+                center_y, center_x = candidate_y, candidate_x
+                patch1 = candidate_patch
+                skel1 = candidate_skeleton
+
+            if np.count_nonzero(candidate_skeleton) > 0:
+                center_y, center_x = candidate_y, candidate_x
+                patch1 = candidate_patch
+                skel1 = candidate_skeleton
+                break
+
+        if patch1 is None or skel1 is None:
+            center_y = mask1.shape[0] // 2
+            center_x = mask1.shape[1] // 2
+            patch1 = self._crop_patch_with_padding(mask1, center_y, center_x, self.skeleton_patch_size)
+            skel1 = self._skeletonize(patch1)
+
         patch2 = self._crop_patch_with_padding(mask2, center_y, center_x, self.skeleton_patch_size)
-
-        skel1 = self._skeletonize(patch1)
         skel2 = self._skeletonize(patch2)
 
         if apply_random and (self.skeleton_transform_rotation > 0 or self.skeleton_transform_scale > 0 or self.skeleton_transform_translation > 0):
