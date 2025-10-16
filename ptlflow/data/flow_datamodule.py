@@ -243,6 +243,7 @@ class FlowDataModule(pl.LightningDataModule):
                     pin_memory=False,
                     drop_last=False,
                     persistent_workers=self.train_transform_cuda,
+                    prefetch_factor=2
                 )
             )
 

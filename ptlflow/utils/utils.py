@@ -423,30 +423,53 @@ def bgr_val_as_tensor(
     torch.Tensor
         The bgr_val converted into a tensor with a shape compatible with reference_tensor.
     """
+    channel_dim = int(reference_tensor.shape[bgr_tensor_shape_position])
+    if channel_dim is None:
+        raise ValueError("Reference tensor must have a defined channel dimension.")
+
     is_compatible = False
     if isinstance(bgr_val, torch.Tensor):
         is_compatible = are_shapes_compatible(bgr_val.shape, reference_tensor.shape)
-        assert is_compatible or (len(bgr_val.shape) == 1 and bgr_val.shape[0] == 3)
+        if not is_compatible and len(bgr_val.shape) == 1:
+            if bgr_val.numel() == 1:
+                bgr_val = bgr_val.repeat(channel_dim)
+            else:
+                assert (
+                    bgr_val.shape[0] == channel_dim
+                ), "Channel count mismatch between bgr_val and reference_tensor"
     elif isinstance(bgr_val, np.ndarray):
         is_compatible = are_shapes_compatible(bgr_val.shape, reference_tensor.shape)
-        assert is_compatible or (len(bgr_val.shape) == 1 and bgr_val.shape[0] == 3)
+        if not is_compatible and len(bgr_val.shape) == 1:
+            if bgr_val.size == 1:
+                bgr_val = np.repeat(bgr_val, channel_dim)
+            else:
+                assert (
+                    bgr_val.shape[0] == channel_dim
+                ), "Channel count mismatch between bgr_val and reference_tensor"
         bgr_val = torch.from_numpy(bgr_val).to(
             dtype=reference_tensor.dtype, device=reference_tensor.device
         )
     elif isinstance(bgr_val, (tuple, list)):
-        assert len(bgr_val) == 3
+        if len(bgr_val) == 1:
+            bgr_val = bgr_val * channel_dim
+        else:
+            assert (
+                len(bgr_val) == channel_dim
+            ), "Channel count mismatch between bgr_val and reference_tensor"
         bgr_val = torch.Tensor(bgr_val).to(
             dtype=reference_tensor.dtype, device=reference_tensor.device
         )
     elif isinstance(bgr_val, (int, float)):
-        bgr_val = (
-            torch.zeros(3, dtype=reference_tensor.dtype, device=reference_tensor.device)
-            + bgr_val
+        bgr_val = torch.full(
+            (channel_dim,),
+            fill_value=float(bgr_val),
+            dtype=reference_tensor.dtype,
+            device=reference_tensor.device,
         )
 
     if not is_compatible:
         bgr_dims = [1] * len(reference_tensor.shape)
-        bgr_dims[bgr_tensor_shape_position] = 3
+        bgr_dims[bgr_tensor_shape_position] = channel_dim
         bgr_val = bgr_val.reshape(bgr_dims)
     return bgr_val
 

@@ -138,6 +138,9 @@ class PTLFlowCLI(LightningCLI):
             }
             parser.set_defaults(trainer_defaults)
 
+        parser.add_optimizer_args()
+        parser.add_lr_scheduler_args()
+
         if self._model_class is not None:
             parser.add_lightning_class_args(
                 self._model_class, "model", subclass_mode=self.subclass_mode_model
@@ -161,7 +164,56 @@ class PTLFlowCLI(LightningCLI):
         if isinstance(args, (dict, Namespace)):
             self.config = parser.parse_object(args)
         else:
-            self.config = parser.parse_args(args)
+            raw_args: Optional[list[str]]
+            if args is None:
+                raw_args = [] if ignore_sys_argv else list(sys.argv[1:])
+            else:
+                raw_args = list(args)
+            normalized_args = self._normalize_legacy_optimizer_args(raw_args)
+            self.config = parser.parse_args(normalized_args)
+
+    @staticmethod
+    def _normalize_legacy_optimizer_args(args: Optional[list[str]]) -> Optional[list[str]]:
+        """Transforms deprecated dotted optimizer/lr_scheduler flags to the new LightningCLI format."""
+        if not args:
+            return args
+
+        normalized: list[str] = []
+        convertible = ("optimizer", "lr_scheduler")
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            handled = False
+            for section in convertible:
+                prefix = f"--{section}."
+                if arg.startswith(prefix):
+                    dest = arg
+                    value: Optional[str] = None
+                    if "=" in arg:
+                        dest, value = arg.split("=", 1)
+                    elif i + 1 < len(args):
+                        value = args[i + 1]
+                        i += 1
+                    subkey = dest[len(prefix) :]
+                    if subkey == "class_path":
+                        if value is not None:
+                            normalized.append(f"--{section}={value}")
+                        else:
+                            normalized.append(f"--{section}")
+                    else:
+                        if subkey.startswith("init_args."):
+                            subkey = subkey[len("init_args.") :]
+                        option = f"--{section}.{subkey}"
+                        if value is not None:
+                            normalized.append(f"{option}={value}")
+                        else:
+                            normalized.append(option)
+                    handled = True
+                    break
+            if not handled:
+                normalized.append(arg)
+            i += 1
+        return normalized
 
     def instantiate_classes(self) -> None:
         """Instantiates the classes and sets their attributes."""
