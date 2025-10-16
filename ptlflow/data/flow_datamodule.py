@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader, Dataset
 import yaml
 
 from ptlflow.data import flow_transforms as ft
+from ptlflow.data.crack_skeleton_dataset import CrackSkeletonDataset
 from ptlflow.data.datasets import (
     AutoFlowDataset,
     FlyingChairsDataset,
@@ -64,6 +65,9 @@ class FlowDataModule(pl.LightningDataModule):
         tartanair_root_dir: Optional[str] = None,
         spring_root_dir: Optional[str] = None,
         kubric_root_dir: Optional[str] = None,
+        crack_root_dir: Optional[str] = None,
+        crack_train_root_dir: Optional[str] = None,
+        crack_val_root_dir: Optional[str] = None,
         middlebury_st_root_dir: Optional[str] = None,
         viper_root_dir: Optional[str] = None,
         dataset_config_path: str = "./datasets.yaml",
@@ -91,6 +95,9 @@ class FlowDataModule(pl.LightningDataModule):
         self.tartanair_root_dir = tartanair_root_dir
         self.spring_root_dir = spring_root_dir
         self.kubric_root_dir = kubric_root_dir
+        self.crack_root_dir = crack_root_dir
+        self.crack_train_root_dir = crack_train_root_dir
+        self.crack_val_root_dir = crack_val_root_dir
         self.middlebury_st_root_dir = middlebury_st_root_dir
         self.viper_root_dir = viper_root_dir
         self.dataset_config_path = dataset_config_path
@@ -248,8 +255,18 @@ class FlowDataModule(pl.LightningDataModule):
         with open(self.dataset_config_path, "r") as f:
             dataset_paths = yaml.safe_load(f)
         for name, path in dataset_paths.items():
-            if getattr(self, f"{name}_root_dir") is None:
-                setattr(self, f"{name}_root_dir", path)
+            if isinstance(path, dict):
+                for split_name, split_path in path.items():
+                    if split_name == "root":
+                        attr_name = f"{name}_root_dir"
+                    else:
+                        attr_name = f"{name}_{split_name}_root_dir"
+                    if hasattr(self, attr_name) and getattr(self, attr_name) is None:
+                        setattr(self, attr_name, split_path)
+            else:
+                attr_name = f"{name}_root_dir"
+                if hasattr(self, attr_name) and getattr(self, attr_name) is None:
+                    setattr(self, attr_name, path)
 
     def _parse_dataset_selection(
         self,
@@ -676,6 +693,120 @@ class FlowDataModule(pl.LightningDataModule):
             sequence_length=sequence_length,
             sequence_position=sequence_position,
             max_seq=max_seq,
+        )
+        return dataset
+
+    def _get_crack_dataset(self, is_train: bool, *args: str) -> Dataset:
+        device = "cuda" if self.train_transform_cuda else "cpu"
+        transform_list = [
+            ft.ToTensor(device=device, fp16=self.train_transform_fp16)
+        ]
+        if is_train:
+            transform_list.append(
+                ft.RandomFlip(
+                    hflip_prob=0.5,
+                    vflip_prob=0.0,
+                    flow_keys=("flows",),
+                )
+            )
+        transform = ft.Compose(transform_list)
+
+        include_distance = True
+        include_tangent = True
+        include_branch = False
+        pairs_file = "pairs.txt"
+        narrow_band_radius = 6.0
+        distance_clip = None
+        distance_normalizer = None
+        mask_suffixes = None
+        recursive_search = True
+        rng_seed = None
+        affine_max_rotation = 10.0
+        affine_scale_jitter = 0.1
+        affine_translation = 0.05
+        elastic_alpha = 6.0
+        elastic_sigma = 4.0
+        width_jitter_radius = 1
+        noise_flip_prob = 0.01
+        root_override = None
+
+        for v in args:
+            if v == "nodist":
+                include_distance = False
+            elif v == "notangent":
+                include_tangent = False
+            elif v == "branch":
+                include_branch = True
+            elif v.startswith("pairs="):
+                pairs_file = v.split("=", 1)[1]
+            elif v.startswith("band="):
+                narrow_band_radius = float(v.split("=", 1)[1])
+            elif v.startswith("clip="):
+                distance_clip = float(v.split("=", 1)[1])
+            elif v.startswith("norm="):
+                distance_normalizer = float(v.split("=", 1)[1])
+            elif v.startswith("suffixes="):
+                mask_suffixes = tuple(s.strip() for s in v.split("=", 1)[1].split(",") if s.strip())
+            elif v == "norecursive":
+                recursive_search = False
+            elif v.startswith("seed="):
+                rng_seed = int(v.split("=", 1)[1])
+            elif v.startswith("rot="):
+                affine_max_rotation = float(v.split("=", 1)[1])
+            elif v.startswith("scale="):
+                affine_scale_jitter = float(v.split("=", 1)[1])
+            elif v.startswith("trans="):
+                affine_translation = float(v.split("=", 1)[1])
+            elif v.startswith("elastic="):
+                elastic_alpha = float(v.split("=", 1)[1])
+            elif v.startswith("sigma="):
+                elastic_sigma = float(v.split("=", 1)[1])
+            elif v.startswith("width="):
+                width_jitter_radius = int(v.split("=", 1)[1])
+            elif v.startswith("noise="):
+                noise_flip_prob = float(v.split("=", 1)[1])
+            elif v.startswith("root="):
+                root_override = v.split("=", 1)[1]
+            else:
+                raise ValueError(f"Invalid arg: {v}")
+
+        if root_override is not None:
+            root_dir = root_override
+        elif is_train and self.crack_train_root_dir is not None:
+            root_dir = self.crack_train_root_dir
+        elif (not is_train) and self.crack_val_root_dir is not None:
+            root_dir = self.crack_val_root_dir
+        else:
+            root_dir = self.crack_root_dir
+
+        if root_dir is None:
+            raise ValueError(
+                "Crack dataset root is undefined. Provide --data.crack_root_dir, "
+                "--data.crack_train_root_dir, --data.crack_val_root_dir, a datasets.yaml entry, or a "
+                "crack-specific root= argument."
+            )
+
+        dataset = CrackSkeletonDataset(
+            root_dir,
+            pairs_file=pairs_file,
+            transform=transform,
+            split="train" if is_train else "val",
+            include_distance_channel=include_distance,
+            include_tangent_channel=include_tangent,
+            include_branch_channel=include_branch,
+            narrow_band_radius=narrow_band_radius,
+            distance_clip=distance_clip,
+            distance_normalizer=distance_normalizer,
+            mask_suffixes=mask_suffixes if mask_suffixes is not None else (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"),
+            recursive=recursive_search,
+            rng_seed=rng_seed,
+            affine_max_rotation=affine_max_rotation,
+            affine_scale_jitter=affine_scale_jitter,
+            affine_translation=affine_translation,
+            elastic_alpha=elastic_alpha,
+            elastic_sigma=elastic_sigma,
+            width_jitter_radius=width_jitter_radius,
+            noise_flip_prob=noise_flip_prob,
         )
         return dataset
 
