@@ -722,9 +722,10 @@ class FlowDataModule(pl.LightningDataModule):
         mask_suffixes = None
         recursive_search = True
         rng_seed = None
-        affine_max_rotation = 10.0
-        affine_scale_jitter = 0.1
-        affine_translation = 0.05
+        affine_max_rotation = 3.0
+        affine_scale_jitter = 0.02
+        affine_translation = 0.01
+        affine_translation_limit: Optional[float] = 3.0
         elastic_alpha = 6.0
         elastic_sigma = 4.0
         width_jitter_radius = 1
@@ -758,6 +759,8 @@ class FlowDataModule(pl.LightningDataModule):
                 affine_scale_jitter = float(v.split("=", 1)[1])
             elif v.startswith("trans="):
                 affine_translation = float(v.split("=", 1)[1])
+            elif v.startswith("translim="):
+                affine_translation_limit = float(v.split("=", 1)[1])
             elif v.startswith("elastic="):
                 elastic_alpha = float(v.split("=", 1)[1])
             elif v.startswith("sigma="):
@@ -804,6 +807,7 @@ class FlowDataModule(pl.LightningDataModule):
             affine_max_rotation=affine_max_rotation,
             affine_scale_jitter=affine_scale_jitter,
             affine_translation=affine_translation,
+            affine_translation_limit=affine_translation_limit,
             elastic_alpha=elastic_alpha,
             elastic_sigma=elastic_sigma,
             width_jitter_radius=width_jitter_radius,

@@ -34,9 +34,10 @@ class CrackSkeletonDataset(Dataset):
         mask_suffixes: Sequence[str] = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"),
         recursive: bool = True,
         rng_seed: Optional[int] = None,
-        affine_max_rotation: float = 10.0,
-        affine_scale_jitter: float = 0.1,
-        affine_translation: float = 0.05,
+        affine_max_rotation: float = 3.0,
+        affine_scale_jitter: float = 0.02,
+        affine_translation: float = 0.01,
+        affine_translation_limit: Optional[float] = 3.0,
         elastic_alpha: float = 6.0,
         elastic_sigma: float = 4.0,
         width_jitter_radius: int = 1,
@@ -71,6 +72,11 @@ class CrackSkeletonDataset(Dataset):
         self.affine_max_rotation = float(abs(affine_max_rotation))
         self.affine_scale_jitter = max(0.0, float(affine_scale_jitter))
         self.affine_translation = max(0.0, float(affine_translation))
+        self.affine_translation_limit = (
+            None
+            if affine_translation_limit is None
+            else max(0.0, float(affine_translation_limit))
+        )
         self.elastic_alpha = max(0.0, float(elastic_alpha))
         self.elastic_sigma = max(0.0, float(elastic_sigma))
         self.width_jitter_radius = max(0, int(width_jitter_radius))
@@ -96,9 +102,10 @@ class CrackSkeletonDataset(Dataset):
         rad_hi = max(rad_lo, float(rad_hi))
         self.skeleton_occlusion_radius: Tuple[float, float] = (rad_lo, rad_hi)
         self.skeleton_noise_std = max(0.0, float(skeleton_noise_std))
-        self.skeleton_noise_limit = (
-            None if skeleton_noise_limit is None else max(0.0, float(skeleton_noise_limit))
-        )
+        if skeleton_noise_limit is None:
+            self.skeleton_noise_limit = 3.0
+        else:
+            self.skeleton_noise_limit = min(3.0, max(0.0, float(skeleton_noise_limit)))
 
         self._rng = np.random.default_rng(rng_seed)
         self._patch_center_sample_attempts = 8
@@ -333,6 +340,10 @@ class CrackSkeletonDataset(Dataset):
         scale = rng.uniform(1.0 - self.affine_scale_jitter, 1.0 + self.affine_scale_jitter)
         tx = rng.uniform(-self.affine_translation, self.affine_translation) * width
         ty = rng.uniform(-self.affine_translation, self.affine_translation) * height
+        if self.affine_translation_limit is not None:
+            limit = float(self.affine_translation_limit)
+            tx = float(np.clip(tx, -limit, limit))
+            ty = float(np.clip(ty, -limit, limit))
         center = (width / 2.0, height / 2.0)
         matrix = cv.getRotationMatrix2D(center, angle, scale)
         matrix[0, 2] += tx
