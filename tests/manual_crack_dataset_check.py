@@ -124,7 +124,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--root",
         type=Path,
-        required=True,
+        default='D:/GitHub/RPMNet-master/change_dataset/',
         help="Root directory containing crack mask images.",
     )
     parser.add_argument(
