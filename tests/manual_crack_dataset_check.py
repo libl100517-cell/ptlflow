@@ -18,7 +18,7 @@ import argparse
 import inspect
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import numpy as np
 
@@ -81,6 +81,62 @@ def _mask_to_bgr(mask: Optional[np.ndarray], cv_module: "cv2") -> Optional[np.nd
     arr = np.squeeze(arr)
     arr_uint8 = np.clip(np.round(arr.astype(np.float32) * 255.0), 0, 255).astype(np.uint8)
     return cv_module.cvtColor(arr_uint8, cv_module.COLOR_GRAY2BGR)
+
+
+def _crop_patch_with_padding(
+    image: np.ndarray, center_y: int, center_x: int, size: int, cv_module: "cv2"
+) -> np.ndarray:
+    """Crop a square patch from ``image`` while padding with zeros if required."""
+
+    if size <= 0:
+        return image.copy()
+
+    half = size // 2
+    height, width = image.shape[:2]
+    y0 = center_y - half
+    x0 = center_x - half
+    y1 = y0 + size
+    x1 = x0 + size
+
+    pad_top = max(0, -y0)
+    pad_left = max(0, -x0)
+    pad_bottom = max(0, y1 - height)
+    pad_right = max(0, x1 - width)
+
+    padded = np.pad(
+        image,
+        ((pad_top, pad_bottom), (pad_left, pad_right)),
+        mode="constant",
+        constant_values=0,
+    )
+
+    y0 += pad_top
+    y1 += pad_top
+    x0 += pad_left
+    x1 += pad_left
+
+    cropped = padded[y0:y1, x0:x1]
+    if cropped.shape[:2] != (size, size):
+        cropped = cv_module.resize(cropped, (size, size), interpolation=cv_module.INTER_NEAREST)
+    return cropped
+
+
+def _load_original_patch(
+    path: Optional[Path],
+    center: Optional[Tuple[int, int]],
+    patch_size: Optional[int],
+    cv_module: "cv2",
+) -> Optional[np.ndarray]:
+    """Load the raw mask from ``path`` and crop the dataset's sampling window."""
+
+    if path is None or center is None or patch_size is None:
+        return None
+
+    image = cv_module.imread(str(path), cv_module.IMREAD_GRAYSCALE)
+    if image is None:
+        return None
+
+    return _crop_patch_with_padding(image, center[0], center[1], patch_size, cv_module)
 
 
 def _ensure_tile_size(
@@ -204,12 +260,22 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     sample_count = min(args.count, len(dataset))
     problems: List[str] = []
-    expected_size = args.patch_size if supports_patch_size and args.patch_size > 0 else None
+    requested_size = args.patch_size if supports_patch_size and args.patch_size > 0 else None
 
     for idx in range(sample_count):
         sample = dataset[idx]
         images = sample["images"]
         masks = sample.get("masks") if isinstance(sample, dict) else None
+        meta = sample.get("meta") if isinstance(sample, dict) else None
+        meta_paths: Sequence[str] = ()
+        meta_centers: Sequence[Optional[Tuple[int, int]]] = ()
+        meta_patch_size: Optional[int] = None
+        if isinstance(meta, dict):
+            meta_paths = meta.get("paths") or ()
+            centers = meta.get("patch_centers")
+            if isinstance(centers, Sequence):
+                meta_centers = centers
+            meta_patch_size = meta.get("patch_size")
         if len(images) < 2:
             problems.append(f"Sample {idx} did not yield an image pair.")
             continue
@@ -224,8 +290,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"Sample {idx} view {view_idx} has unexpected shape {view.shape}."
                 )
                 fallback_size = (
-                    (expected_size or 256),
-                    (expected_size or 256),
+                    (requested_size or meta_patch_size or 256),
+                    (requested_size or meta_patch_size or 256),
                 )
                 blank_tile = np.zeros((*fallback_size, 3), dtype=np.uint8)
                 mask_tiles.append(blank_tile)
@@ -233,14 +299,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 continue
 
             height, width = view.shape[:2]
+            sample_expected_size = meta_patch_size or requested_size
 
             if (
-                expected_size is not None
-                and (view.shape[0] != expected_size or view.shape[1] != expected_size)
+                sample_expected_size is not None
+                and (view.shape[0] != sample_expected_size or view.shape[1] != sample_expected_size)
             ):
                 problems.append(
                     f"Sample {idx} view {view_idx} shape {view.shape[:2]} does not match"
-                    f" requested patch size {expected_size}."
+                    f" requested patch size {sample_expected_size}."
                 )
 
             mask_plane: Optional[np.ndarray] = None
@@ -258,17 +325,37 @@ def main(argv: Optional[List[str]] = None) -> int:
                             interpolation=cv.INTER_NEAREST,
                         )
                     if (
-                        expected_size is not None
-                        and mask_plane.shape != (expected_size, expected_size)
+                        sample_expected_size is not None
+                        and mask_plane.shape != (sample_expected_size, sample_expected_size)
                     ):
                         problems.append(
                             f"Sample {idx} mask {view_idx} shape {mask_plane.shape} does not match"
-                            f" requested patch size {expected_size}."
+                            f" requested patch size {sample_expected_size}."
                         )
 
-            mask_tile = _mask_to_bgr(mask_plane, cv)
-            if mask_tile is None:
-                mask_tile = np.zeros((height, width, 3), dtype=np.uint8)
+            mask_tile: Optional[np.ndarray]
+            raw_tile: Optional[np.ndarray] = None
+            if (
+                meta_paths
+                and view_idx < len(meta_paths)
+                and meta_centers
+                and view_idx < len(meta_centers)
+            ):
+                center_value = meta_centers[view_idx]
+                center_tuple = tuple(center_value) if center_value is not None else None
+                raw_tile = _load_original_patch(
+                    Path(meta_paths[view_idx]),
+                    center_tuple,
+                    sample_expected_size,
+                    cv,
+                )
+
+            if raw_tile is not None:
+                mask_tile = cv.cvtColor(raw_tile, cv.COLOR_GRAY2BGR)
+            else:
+                mask_tile = _mask_to_bgr(mask_plane, cv)
+                if mask_tile is None:
+                    mask_tile = np.zeros((height, width, 3), dtype=np.uint8)
             mask_tile = _ensure_tile_size(mask_tile, (height, width), cv)
             mask_tiles.append(mask_tile)
 

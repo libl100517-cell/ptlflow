@@ -170,9 +170,19 @@ class CrackSkeletonDataset(Dataset):
                 base_mask_1 = base_mask.copy()
                 base_mask_2 = base_mask.copy()
 
+        center_y: Optional[int] = None
+        center_x: Optional[int] = None
+
         if self.use_patch_sampling:
             pair_rng = self._spawn_rng()
-            mask1, mask2, skeleton1, skeleton2 = self._generate_skeleton_patch_pair(
+            (
+                mask1,
+                mask2,
+                skeleton1,
+                skeleton2,
+                center_y,
+                center_x,
+            ) = self._generate_skeleton_patch_pair(
                 base_mask_1,
                 base_mask_2,
                 pair_rng,
@@ -208,6 +218,11 @@ class CrackSkeletonDataset(Dataset):
                 "dataset_name": "crack_skeleton",
                 "split_name": self.split,
                 "paths": [str(mask_path_1), str(mask_path_2)],
+                "patch_size": self.skeleton_patch_size if self.use_patch_sampling else None,
+                "patch_centers":
+                    [(int(center_y), int(center_x)), (int(center_y), int(center_x))]
+                    if center_y is not None and center_x is not None
+                    else None,
             },
         }
 
@@ -398,9 +413,16 @@ class CrackSkeletonDataset(Dataset):
         mask2: np.ndarray,
         rng: np.random.Generator,
         apply_random: bool = True,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        Optional[int],
+        Optional[int],
+    ]:
         if self.skeleton_patch_size is None:
-            return mask1, mask2
+            return mask1, mask2, self._skeletonize(mask1), self._skeletonize(mask2), None, None
 
         skeleton_full = self._skeletonize(mask1)
         center_y = None
@@ -454,6 +476,8 @@ class CrackSkeletonDataset(Dataset):
             patch2.astype(np.uint8),
             skel1.astype(np.uint8),
             skel2.astype(np.uint8),
+            int(center_y) if center_y is not None else None,
+            int(center_x) if center_x is not None else None,
         )
 
     def _sample_skeleton_center(
