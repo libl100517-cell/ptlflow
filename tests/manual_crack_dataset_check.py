@@ -18,7 +18,7 @@ import argparse
 import inspect
 import sys
 from pathlib import Path
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 
@@ -69,15 +69,52 @@ def _build_visualization(channels: np.ndarray, cv_module: "cv2") -> np.ndarray:
     return np.concatenate(tiles, axis=1)
 
 
-def _save_mask(mask: np.ndarray, path: Path, cv_module: "cv2") -> Optional[str]:
-    """Persist a binary mask image for inspection."""
-    if mask.ndim == 3:
-        mask = mask[..., 0]
-    mask_uint8 = np.clip(np.round(mask.astype(np.float32) * 255.0), 0, 255).astype(np.uint8)
-    mask_bgr = cv_module.cvtColor(mask_uint8, cv_module.COLOR_GRAY2BGR)
-    if not cv_module.imwrite(str(path), mask_bgr):
-        return f"Failed to write original mask to {path}."
-    return None
+def _mask_to_bgr(mask: Optional[np.ndarray], cv_module: "cv2") -> Optional[np.ndarray]:
+    """Convert a binary mask to a 3-channel visualization tile."""
+    if mask is None:
+        return None
+    arr = np.asarray(mask)
+    if arr.size == 0:
+        return None
+    while arr.ndim > 2:
+        arr = arr[..., 0]
+    arr = np.squeeze(arr)
+    arr_uint8 = np.clip(np.round(arr.astype(np.float32) * 255.0), 0, 255).astype(np.uint8)
+    return cv_module.cvtColor(arr_uint8, cv_module.COLOR_GRAY2BGR)
+
+
+def _ensure_tile_size(
+    image: np.ndarray, target_shape: Tuple[int, int], cv_module: "cv2"
+) -> np.ndarray:
+    """Resize a visualization tile so it matches the given ``(H, W)`` shape."""
+    height, width = target_shape
+    if image.shape[0] == height and image.shape[1] == width:
+        return image
+    resized = cv_module.resize(image, (width, height), interpolation=cv_module.INTER_NEAREST)
+    if resized.ndim == 2:
+        resized = cv_module.cvtColor(resized, cv_module.COLOR_GRAY2BGR)
+    return resized
+
+
+def _assemble_quadrant_image(
+    mask_tiles: List[np.ndarray],
+    viz_tiles: List[np.ndarray],
+    cv_module: "cv2",
+) -> np.ndarray:
+    """Build a 2x2 composite image from mask and visualization tiles."""
+
+    if len(mask_tiles) != 2 or len(viz_tiles) != 2:
+        raise ValueError("Expected two mask tiles and two visualization tiles")
+
+    target_shape = mask_tiles[0].shape[:2]
+    top_left = _ensure_tile_size(mask_tiles[0], target_shape, cv_module)
+    top_right = _ensure_tile_size(viz_tiles[0], target_shape, cv_module)
+    bottom_left = _ensure_tile_size(mask_tiles[1], target_shape, cv_module)
+    bottom_right = _ensure_tile_size(viz_tiles[1], target_shape, cv_module)
+
+    top_row = cv_module.hconcat([top_left, top_right])
+    bottom_row = cv_module.hconcat([bottom_left, bottom_right])
+    return cv_module.vconcat([top_row, bottom_row])
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -178,23 +215,24 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
 
         skeleton_counts = []
+        mask_tiles: List[np.ndarray] = []
+        viz_tiles: List[np.ndarray] = []
+
         for view_idx, view in enumerate(images[:2]):
             if view.ndim != 3:
                 problems.append(
                     f"Sample {idx} view {view_idx} has unexpected shape {view.shape}."
                 )
+                fallback_size = (
+                    (expected_size or 256),
+                    (expected_size or 256),
+                )
+                blank_tile = np.zeros((*fallback_size, 3), dtype=np.uint8)
+                mask_tiles.append(blank_tile)
+                viz_tiles.append(blank_tile.copy())
                 continue
 
-            visualization = _build_visualization(view, cv)
-            out_path = output_dir / f"pair_{idx:02d}_view{view_idx}.png"
-            if not cv.imwrite(str(out_path), visualization):
-                problems.append(f"Failed to write visualization to {out_path}.")
-
-            if masks is not None and view_idx < len(masks) and masks[view_idx] is not None:
-                mask_path = output_dir / f"pair_{idx:02d}_view{view_idx}_orig.png"
-                err = _save_mask(np.asarray(masks[view_idx]), mask_path, cv)
-                if err is not None:
-                    problems.append(err)
+            height, width = view.shape[:2]
 
             if (
                 expected_size is not None
@@ -204,6 +242,39 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"Sample {idx} view {view_idx} shape {view.shape[:2]} does not match"
                     f" requested patch size {expected_size}."
                 )
+
+            mask_plane: Optional[np.ndarray] = None
+            if masks is not None and view_idx < len(masks):
+                mask_candidate = masks[view_idx]
+                if mask_candidate is not None:
+                    mask_plane = np.asarray(mask_candidate)
+                    while mask_plane.ndim > 2:
+                        mask_plane = mask_plane[..., 0]
+                    mask_plane = np.squeeze(mask_plane)
+                    if mask_plane.shape != (height, width):
+                        mask_plane = cv.resize(
+                            mask_plane.astype(np.float32),
+                            (width, height),
+                            interpolation=cv.INTER_NEAREST,
+                        )
+                    if (
+                        expected_size is not None
+                        and mask_plane.shape != (expected_size, expected_size)
+                    ):
+                        problems.append(
+                            f"Sample {idx} mask {view_idx} shape {mask_plane.shape} does not match"
+                            f" requested patch size {expected_size}."
+                        )
+
+            mask_tile = _mask_to_bgr(mask_plane, cv)
+            if mask_tile is None:
+                mask_tile = np.zeros((height, width, 3), dtype=np.uint8)
+            mask_tile = _ensure_tile_size(mask_tile, (height, width), cv)
+            mask_tiles.append(mask_tile)
+
+            visualization = _build_visualization(view, cv)
+            visualization = _ensure_tile_size(visualization, (height, width), cv)
+            viz_tiles.append(visualization)
 
             skeleton_channel = view[..., 0]
             skeleton_nonzero = int(np.count_nonzero(skeleton_channel))
@@ -218,6 +289,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"Sample {idx} view {view_idx} contains NaN or Inf values."
                 )
 
+        try:
+            composite = _assemble_quadrant_image(mask_tiles, viz_tiles, cv)
+        except ValueError as exc:
+            problems.append(f"Sample {idx} composite generation failed: {exc}")
+        else:
+            out_path = output_dir / f"pair_{idx:02d}.png"
+            if not cv.imwrite(str(out_path), composite):
+                problems.append(f"Failed to write visualization to {out_path}.")
+
         if (
             len(skeleton_counts) == 2
             and skeleton_counts[0] > 0
@@ -228,7 +308,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"Sample {idx} skeleton pair is identical; random deformation may be disabled."
             )
 
-    print(f"Saved {sample_count * 2} images to {output_dir}")
+    print(f"Saved {sample_count} composite images to {output_dir}")
     if problems:
         print("Potential issues detected:")
         for msg in problems:

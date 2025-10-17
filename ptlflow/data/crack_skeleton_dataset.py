@@ -45,10 +45,12 @@ class CrackSkeletonDataset(Dataset):
         skeleton_transform_rotation: float = 2.0,
         skeleton_transform_scale: float = 0.02,
         skeleton_transform_translation: float = 0.05,
+        skeleton_transform_translation_limit: Optional[float] = 3.0,
         skeleton_occlusion_prob: float = 0.5,
         skeleton_occlusion_count: Tuple[int, int] = (0, 3),
         skeleton_occlusion_radius: Tuple[float, float] = (12.0, 48.0),
         skeleton_noise_std: float = 1.0,
+        skeleton_noise_limit: Optional[float] = 3.0,
     ) -> None:
         super().__init__()
         self.root_dir = Path(root_dir)
@@ -79,6 +81,11 @@ class CrackSkeletonDataset(Dataset):
         self.skeleton_transform_rotation = float(abs(skeleton_transform_rotation))
         self.skeleton_transform_scale = max(0.0, float(skeleton_transform_scale))
         self.skeleton_transform_translation = max(0.0, float(skeleton_transform_translation))
+        self.skeleton_transform_translation_limit = (
+            None
+            if skeleton_transform_translation_limit is None
+            else max(0.0, float(skeleton_transform_translation_limit))
+        )
         self.skeleton_occlusion_prob = min(1.0, max(0.0, float(skeleton_occlusion_prob)))
         occ_lo, occ_hi = skeleton_occlusion_count
         occ_lo = max(0, int(occ_lo))
@@ -89,6 +96,9 @@ class CrackSkeletonDataset(Dataset):
         rad_hi = max(rad_lo, float(rad_hi))
         self.skeleton_occlusion_radius: Tuple[float, float] = (rad_lo, rad_hi)
         self.skeleton_noise_std = max(0.0, float(skeleton_noise_std))
+        self.skeleton_noise_limit = (
+            None if skeleton_noise_limit is None else max(0.0, float(skeleton_noise_limit))
+        )
 
         self._rng = np.random.default_rng(rng_seed)
         self._patch_center_sample_attempts = 8
@@ -500,6 +510,8 @@ class CrackSkeletonDataset(Dataset):
             max_translation = self.skeleton_transform_translation * float(min(h, w))
         else:
             max_translation = self.skeleton_transform_translation
+        if self.skeleton_transform_translation_limit is not None:
+            max_translation = min(max_translation, self.skeleton_transform_translation_limit)
 
         tx = rng.uniform(-max_translation, max_translation)
         ty = rng.uniform(-max_translation, max_translation)
@@ -552,6 +564,8 @@ class CrackSkeletonDataset(Dataset):
         if coords.shape[0] == 0:
             return skeleton.astype(np.uint8)
         noise = rng.normal(0.0, self.skeleton_noise_std, size=coords.shape)
+        if self.skeleton_noise_limit is not None:
+            noise = np.clip(noise, -self.skeleton_noise_limit, self.skeleton_noise_limit)
         jittered = coords.astype(np.float32) + noise.astype(np.float32)
         jittered = np.round(jittered).astype(int)
         h, w = skeleton.shape
