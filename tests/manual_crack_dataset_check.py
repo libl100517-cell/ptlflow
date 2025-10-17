@@ -284,6 +284,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         mask_tiles: List[np.ndarray] = []
         viz_tiles: List[np.ndarray] = []
 
+        mask_save_tile: Optional[np.ndarray] = None
+
         for view_idx, view in enumerate(images[:2]):
             if view.ndim != 3:
                 problems.append(
@@ -352,10 +354,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
             if raw_tile is not None:
                 mask_tile = cv.cvtColor(raw_tile, cv.COLOR_GRAY2BGR)
+                if mask_save_tile is None:
+                    mask_save_tile = raw_tile
             else:
                 mask_tile = _mask_to_bgr(mask_plane, cv)
                 if mask_tile is None:
                     mask_tile = np.zeros((height, width, 3), dtype=np.uint8)
+                if mask_save_tile is None and mask_plane is not None:
+                    mask_save_tile = mask_plane
             mask_tile = _ensure_tile_size(mask_tile, (height, width), cv)
             mask_tiles.append(mask_tile)
 
@@ -384,6 +390,31 @@ def main(argv: Optional[List[str]] = None) -> int:
             out_path = output_dir / f"pair_{idx:02d}.png"
             if not cv.imwrite(str(out_path), composite):
                 problems.append(f"Failed to write visualization to {out_path}.")
+
+        if mask_save_tile is not None:
+            mask_arr = np.asarray(mask_save_tile)
+            while mask_arr.ndim > 2:
+                mask_arr = mask_arr[..., 0]
+            mask_arr = np.squeeze(mask_arr)
+            if (
+                sample_expected_size is not None
+                and mask_arr.shape != (sample_expected_size, sample_expected_size)
+            ):
+                mask_arr = cv.resize(
+                    mask_arr.astype(np.float32),
+                    (sample_expected_size, sample_expected_size),
+                    interpolation=cv.INTER_NEAREST,
+                )
+            mask_uint8 = np.clip(
+                np.round(mask_arr.astype(np.float32)), 0, 255
+            ).astype(np.uint8)
+            if mask_uint8.max() <= 1:
+                mask_uint8 = (mask_uint8 * 255).astype(np.uint8)
+            mask_path = output_dir / f"pair_{idx:02d}_mask.png"
+            if not cv.imwrite(str(mask_path), mask_uint8):
+                problems.append(f"Failed to write mask to {mask_path}.")
+        else:
+            problems.append(f"Sample {idx} did not provide a mask for saving.")
 
         if (
             len(skeleton_counts) == 2
