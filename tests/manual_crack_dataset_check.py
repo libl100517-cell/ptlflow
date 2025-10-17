@@ -15,6 +15,7 @@ Example usage::
 from __future__ import annotations
 
 import argparse
+import inspect
 import sys
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
@@ -143,16 +144,30 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     patch_size = args.patch_size if args.patch_size > 0 else None
 
-    dataset = CrackSkeletonDataset(
-        root_dir=str(args.root),
-        split=args.split,
-        rng_seed=args.seed,
-        skeleton_patch_size=patch_size,
-    )
+    supports_patch_size = False
+
+    dataset_kwargs = {
+        "root_dir": str(args.root),
+        "split": args.split,
+        "rng_seed": args.seed,
+    }
+
+    init_signature = inspect.signature(CrackSkeletonDataset.__init__)
+    if "skeleton_patch_size" in init_signature.parameters:
+        dataset_kwargs["skeleton_patch_size"] = patch_size
+        supports_patch_size = True
+    elif patch_size is not None:
+        print(
+            "Warning: installed CrackSkeletonDataset does not support skeleton_patch_size;"
+            " falling back to the implementation's default patch sampling behaviour.",
+            file=sys.stderr,
+        )
+
+    dataset = CrackSkeletonDataset(**dataset_kwargs)
 
     sample_count = min(args.count, len(dataset))
     problems: List[str] = []
-    expected_size = args.patch_size if args.patch_size > 0 else None
+    expected_size = args.patch_size if supports_patch_size and args.patch_size > 0 else None
 
     for idx in range(sample_count):
         sample = dataset[idx]
