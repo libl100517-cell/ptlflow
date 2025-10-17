@@ -68,6 +68,17 @@ def _build_visualization(channels: np.ndarray, cv_module: "cv2") -> np.ndarray:
     return np.concatenate(tiles, axis=1)
 
 
+def _save_mask(mask: np.ndarray, path: Path, cv_module: "cv2") -> Optional[str]:
+    """Persist a binary mask image for inspection."""
+    if mask.ndim == 3:
+        mask = mask[..., 0]
+    mask_uint8 = np.clip(np.round(mask.astype(np.float32) * 255.0), 0, 255).astype(np.uint8)
+    mask_bgr = cv_module.cvtColor(mask_uint8, cv_module.COLOR_GRAY2BGR)
+    if not cv_module.imwrite(str(path), mask_bgr):
+        return f"Failed to write original mask to {path}."
+    return None
+
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Inspect CrackSkeletonDataset samples and save visualization pairs.",
@@ -102,6 +113,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Optional RNG seed for reproducible sampling.",
     )
+    parser.add_argument(
+        "--patch-size",
+        type=int,
+        default=256,
+        help="Patch size passed to the dataset (set to 0 to disable).",
+    )
     return parser.parse_args(argv)
 
 
@@ -124,18 +141,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     output_dir = args.output
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    patch_size = args.patch_size if args.patch_size > 0 else None
+
     dataset = CrackSkeletonDataset(
         root_dir=str(args.root),
         split=args.split,
         rng_seed=args.seed,
+        skeleton_patch_size=patch_size,
     )
 
     sample_count = min(args.count, len(dataset))
     problems: List[str] = []
+    expected_size = args.patch_size if args.patch_size > 0 else None
 
     for idx in range(sample_count):
         sample = dataset[idx]
         images = sample["images"]
+        masks = sample.get("masks") if isinstance(sample, dict) else None
         if len(images) < 2:
             problems.append(f"Sample {idx} did not yield an image pair.")
             continue
@@ -152,6 +174,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             out_path = output_dir / f"pair_{idx:02d}_view{view_idx}.png"
             if not cv.imwrite(str(out_path), visualization):
                 problems.append(f"Failed to write visualization to {out_path}.")
+
+            if masks is not None and view_idx < len(masks) and masks[view_idx] is not None:
+                mask_path = output_dir / f"pair_{idx:02d}_view{view_idx}_orig.png"
+                err = _save_mask(np.asarray(masks[view_idx]), mask_path, cv)
+                if err is not None:
+                    problems.append(err)
+
+            if (
+                expected_size is not None
+                and (view.shape[0] != expected_size or view.shape[1] != expected_size)
+            ):
+                problems.append(
+                    f"Sample {idx} view {view_idx} shape {view.shape[:2]} does not match"
+                    f" requested patch size {expected_size}."
+                )
 
             skeleton_channel = view[..., 0]
             skeleton_nonzero = int(np.count_nonzero(skeleton_channel))

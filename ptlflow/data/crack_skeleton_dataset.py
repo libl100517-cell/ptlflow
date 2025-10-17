@@ -162,7 +162,7 @@ class CrackSkeletonDataset(Dataset):
 
         if self.use_patch_sampling:
             pair_rng = self._spawn_rng()
-            mask1, mask2 = self._generate_skeleton_patch_pair(
+            mask1, mask2, skeleton1, skeleton2 = self._generate_skeleton_patch_pair(
                 base_mask_1,
                 base_mask_2,
                 pair_rng,
@@ -171,9 +171,11 @@ class CrackSkeletonDataset(Dataset):
         else:
             mask1 = base_mask_1
             mask2 = base_mask_2
+            skeleton1 = self._skeletonize(mask1)
+            skeleton2 = self._skeletonize(mask2)
 
-        sample1 = self._encode_mask(mask1)
-        sample2 = self._encode_mask(mask2)
+        sample1 = self._encode_mask(mask1, skeleton_override=skeleton1)
+        sample2 = self._encode_mask(mask2, skeleton_override=skeleton2)
 
         encoded1 = self._compose_channels(sample1)
         encoded2 = self._compose_channels(sample2)
@@ -183,6 +185,10 @@ class CrackSkeletonDataset(Dataset):
 
         sample = {
             "images": [encoded1, encoded2],
+            "masks": [
+                mask1[..., None].astype(np.float32),
+                mask2[..., None].astype(np.float32),
+            ],
             "skeletons": [sample1["skeleton"][..., None], sample2["skeleton"][..., None]],
             "distances": [sample1["distance"][..., None], sample2["distance"][..., None]],
             "narrow_bands": [sample1["band"], sample2["band"]],
@@ -232,8 +238,17 @@ class CrackSkeletonDataset(Dataset):
         files.sort()
         return files
 
-    def _encode_mask(self, mask: np.ndarray) -> Dict[str, np.ndarray]:
-        skeleton = self._skeletonize(mask)
+    def _encode_mask(
+        self,
+        mask: np.ndarray,
+        *,
+        skeleton_override: Optional[np.ndarray] = None,
+    ) -> Dict[str, np.ndarray]:
+        skeleton = (
+            skeleton_override.astype(np.uint8)
+            if skeleton_override is not None
+            else self._skeletonize(mask)
+        )
         dist = cv.distanceTransform((1 - skeleton).astype(np.uint8), cv.DIST_L2, 3)
         if self.distance_clip is not None:
             dist = np.minimum(dist, self.distance_clip)
@@ -424,7 +439,12 @@ class CrackSkeletonDataset(Dataset):
             skel1 = self._jitter_skeleton_points(skel1, rng, apply_random)
             skel2 = self._jitter_skeleton_points(skel2, rng, apply_random)
 
-        return skel1.astype(np.uint8), skel2.astype(np.uint8)
+        return (
+            patch1.astype(np.uint8),
+            patch2.astype(np.uint8),
+            skel1.astype(np.uint8),
+            skel2.astype(np.uint8),
+        )
 
     def _sample_skeleton_center(
         self, skeleton: np.ndarray, rng: np.random.Generator
@@ -472,6 +492,8 @@ class CrackSkeletonDataset(Dataset):
     ) -> np.ndarray:
         if skeleton.size == 0 or np.count_nonzero(skeleton) == 0:
             return skeleton
+
+        h, w = skeleton.shape
         angle = rng.uniform(-self.skeleton_transform_rotation, self.skeleton_transform_rotation)
         scale = rng.uniform(1.0 - self.skeleton_transform_scale, 1.0 + self.skeleton_transform_scale)
         if self.skeleton_transform_translation <= 1.0:
@@ -482,7 +504,6 @@ class CrackSkeletonDataset(Dataset):
         tx = rng.uniform(-max_translation, max_translation)
         ty = rng.uniform(-max_translation, max_translation)
 
-        h, w = skeleton.shape
         center = (w / 2.0, h / 2.0)
         matrix = cv.getRotationMatrix2D(center, angle, scale)
         matrix[0, 2] += tx
