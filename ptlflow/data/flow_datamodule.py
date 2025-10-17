@@ -728,7 +728,7 @@ class FlowDataModule(pl.LightningDataModule):
         elastic_alpha = 6.0
         elastic_sigma = 4.0
         width_jitter_radius = 1
-        noise_flip_prob = 0.01
+        noise_flip_prob = 0.0
         root_override = None
 
         for v in args:

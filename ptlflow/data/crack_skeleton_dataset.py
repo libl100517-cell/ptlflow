@@ -40,11 +40,11 @@ class CrackSkeletonDataset(Dataset):
         elastic_alpha: float = 6.0,
         elastic_sigma: float = 4.0,
         width_jitter_radius: int = 1,
-        noise_flip_prob: float = 0.01,
+        noise_flip_prob: float = 0.0,
         skeleton_patch_size: Optional[int] = 256,
-        skeleton_transform_rotation: float = 5.0,
-        skeleton_transform_scale: float = 0.05,
-        skeleton_transform_translation: float = 6.0,
+        skeleton_transform_rotation: float = 2.0,
+        skeleton_transform_scale: float = 0.02,
+        skeleton_transform_translation: float = 0.05,
         skeleton_occlusion_prob: float = 0.5,
         skeleton_occlusion_count: Tuple[int, int] = (0, 3),
         skeleton_occlusion_radius: Tuple[float, float] = (12.0, 48.0),
@@ -474,8 +474,13 @@ class CrackSkeletonDataset(Dataset):
             return skeleton
         angle = rng.uniform(-self.skeleton_transform_rotation, self.skeleton_transform_rotation)
         scale = rng.uniform(1.0 - self.skeleton_transform_scale, 1.0 + self.skeleton_transform_scale)
-        tx = rng.uniform(-self.skeleton_transform_translation, self.skeleton_transform_translation)
-        ty = rng.uniform(-self.skeleton_transform_translation, self.skeleton_transform_translation)
+        if self.skeleton_transform_translation <= 1.0:
+            max_translation = self.skeleton_transform_translation * float(min(h, w))
+        else:
+            max_translation = self.skeleton_transform_translation
+
+        tx = rng.uniform(-max_translation, max_translation)
+        ty = rng.uniform(-max_translation, max_translation)
 
         h, w = skeleton.shape
         center = (w / 2.0, h / 2.0)
@@ -533,8 +538,9 @@ class CrackSkeletonDataset(Dataset):
         jittered[:, 1] = np.clip(jittered[:, 1], 0, w - 1)
         jitter_mask = np.zeros_like(skeleton, dtype=np.uint8)
         jitter_mask[jittered[:, 0], jittered[:, 1]] = 1
-        combined = np.maximum(skeleton.astype(np.uint8), jitter_mask)
-        return combined
+        if np.count_nonzero(jitter_mask) == 0:
+            return skeleton.astype(np.uint8)
+        return jitter_mask
 
     def _skeletonize(self, mask: np.ndarray) -> np.ndarray:
         skeleton = np.zeros_like(mask)
