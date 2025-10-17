@@ -40,15 +40,17 @@ class CrackSkeletonDataset(Dataset):
         elastic_alpha: float = 6.0,
         elastic_sigma: float = 4.0,
         width_jitter_radius: int = 1,
-        noise_flip_prob: float = 0.01,
+        noise_flip_prob: float = 0.0,
         skeleton_patch_size: Optional[int] = 256,
-        skeleton_transform_rotation: float = 5.0,
-        skeleton_transform_scale: float = 0.05,
-        skeleton_transform_translation: float = 6.0,
+        skeleton_transform_rotation: float = 2.0,
+        skeleton_transform_scale: float = 0.02,
+        skeleton_transform_translation: float = 0.05,
+        skeleton_transform_translation_limit: Optional[float] = 3.0,
         skeleton_occlusion_prob: float = 0.5,
         skeleton_occlusion_count: Tuple[int, int] = (0, 3),
         skeleton_occlusion_radius: Tuple[float, float] = (12.0, 48.0),
         skeleton_noise_std: float = 1.0,
+        skeleton_noise_limit: Optional[float] = 3.0,
     ) -> None:
         super().__init__()
         self.root_dir = Path(root_dir)
@@ -79,6 +81,11 @@ class CrackSkeletonDataset(Dataset):
         self.skeleton_transform_rotation = float(abs(skeleton_transform_rotation))
         self.skeleton_transform_scale = max(0.0, float(skeleton_transform_scale))
         self.skeleton_transform_translation = max(0.0, float(skeleton_transform_translation))
+        self.skeleton_transform_translation_limit = (
+            None
+            if skeleton_transform_translation_limit is None
+            else max(0.0, float(skeleton_transform_translation_limit))
+        )
         self.skeleton_occlusion_prob = min(1.0, max(0.0, float(skeleton_occlusion_prob)))
         occ_lo, occ_hi = skeleton_occlusion_count
         occ_lo = max(0, int(occ_lo))
@@ -89,6 +96,9 @@ class CrackSkeletonDataset(Dataset):
         rad_hi = max(rad_lo, float(rad_hi))
         self.skeleton_occlusion_radius: Tuple[float, float] = (rad_lo, rad_hi)
         self.skeleton_noise_std = max(0.0, float(skeleton_noise_std))
+        self.skeleton_noise_limit = (
+            None if skeleton_noise_limit is None else max(0.0, float(skeleton_noise_limit))
+        )
 
         self._rng = np.random.default_rng(rng_seed)
         self._patch_center_sample_attempts = 8
@@ -160,9 +170,19 @@ class CrackSkeletonDataset(Dataset):
                 base_mask_1 = base_mask.copy()
                 base_mask_2 = base_mask.copy()
 
+        center_y: Optional[int] = None
+        center_x: Optional[int] = None
+
         if self.use_patch_sampling:
             pair_rng = self._spawn_rng()
-            mask1, mask2 = self._generate_skeleton_patch_pair(
+            (
+                mask1,
+                mask2,
+                skeleton1,
+                skeleton2,
+                center_y,
+                center_x,
+            ) = self._generate_skeleton_patch_pair(
                 base_mask_1,
                 base_mask_2,
                 pair_rng,
@@ -171,9 +191,11 @@ class CrackSkeletonDataset(Dataset):
         else:
             mask1 = base_mask_1
             mask2 = base_mask_2
+            skeleton1 = self._skeletonize(mask1)
+            skeleton2 = self._skeletonize(mask2)
 
-        sample1 = self._encode_mask(mask1)
-        sample2 = self._encode_mask(mask2)
+        sample1 = self._encode_mask(mask1, skeleton_override=skeleton1)
+        sample2 = self._encode_mask(mask2, skeleton_override=skeleton2)
 
         encoded1 = self._compose_channels(sample1)
         encoded2 = self._compose_channels(sample2)
@@ -183,6 +205,10 @@ class CrackSkeletonDataset(Dataset):
 
         sample = {
             "images": [encoded1, encoded2],
+            "masks": [
+                mask1[..., None].astype(np.float32),
+                mask2[..., None].astype(np.float32),
+            ],
             "skeletons": [sample1["skeleton"][..., None], sample2["skeleton"][..., None]],
             "distances": [sample1["distance"][..., None], sample2["distance"][..., None]],
             "narrow_bands": [sample1["band"], sample2["band"]],
@@ -192,6 +218,11 @@ class CrackSkeletonDataset(Dataset):
                 "dataset_name": "crack_skeleton",
                 "split_name": self.split,
                 "paths": [str(mask_path_1), str(mask_path_2)],
+                "patch_size": self.skeleton_patch_size if self.use_patch_sampling else None,
+                "patch_centers":
+                    [(int(center_y), int(center_x)), (int(center_y), int(center_x))]
+                    if center_y is not None and center_x is not None
+                    else None,
             },
         }
 
@@ -232,8 +263,17 @@ class CrackSkeletonDataset(Dataset):
         files.sort()
         return files
 
-    def _encode_mask(self, mask: np.ndarray) -> Dict[str, np.ndarray]:
-        skeleton = self._skeletonize(mask)
+    def _encode_mask(
+        self,
+        mask: np.ndarray,
+        *,
+        skeleton_override: Optional[np.ndarray] = None,
+    ) -> Dict[str, np.ndarray]:
+        skeleton = (
+            skeleton_override.astype(np.uint8)
+            if skeleton_override is not None
+            else self._skeletonize(mask)
+        )
         dist = cv.distanceTransform((1 - skeleton).astype(np.uint8), cv.DIST_L2, 3)
         if self.distance_clip is not None:
             dist = np.minimum(dist, self.distance_clip)
@@ -373,9 +413,16 @@ class CrackSkeletonDataset(Dataset):
         mask2: np.ndarray,
         rng: np.random.Generator,
         apply_random: bool = True,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        Optional[int],
+        Optional[int],
+    ]:
         if self.skeleton_patch_size is None:
-            return mask1, mask2
+            return mask1, mask2, self._skeletonize(mask1), self._skeletonize(mask2), None, None
 
         skeleton_full = self._skeletonize(mask1)
         center_y = None
@@ -424,7 +471,14 @@ class CrackSkeletonDataset(Dataset):
             skel1 = self._jitter_skeleton_points(skel1, rng, apply_random)
             skel2 = self._jitter_skeleton_points(skel2, rng, apply_random)
 
-        return skel1.astype(np.uint8), skel2.astype(np.uint8)
+        return (
+            patch1.astype(np.uint8),
+            patch2.astype(np.uint8),
+            skel1.astype(np.uint8),
+            skel2.astype(np.uint8),
+            int(center_y) if center_y is not None else None,
+            int(center_x) if center_x is not None else None,
+        )
 
     def _sample_skeleton_center(
         self, skeleton: np.ndarray, rng: np.random.Generator
@@ -472,12 +526,20 @@ class CrackSkeletonDataset(Dataset):
     ) -> np.ndarray:
         if skeleton.size == 0 or np.count_nonzero(skeleton) == 0:
             return skeleton
-        angle = rng.uniform(-self.skeleton_transform_rotation, self.skeleton_transform_rotation)
-        scale = rng.uniform(1.0 - self.skeleton_transform_scale, 1.0 + self.skeleton_transform_scale)
-        tx = rng.uniform(-self.skeleton_transform_translation, self.skeleton_transform_translation)
-        ty = rng.uniform(-self.skeleton_transform_translation, self.skeleton_transform_translation)
 
         h, w = skeleton.shape
+        angle = rng.uniform(-self.skeleton_transform_rotation, self.skeleton_transform_rotation)
+        scale = rng.uniform(1.0 - self.skeleton_transform_scale, 1.0 + self.skeleton_transform_scale)
+        if self.skeleton_transform_translation <= 1.0:
+            max_translation = self.skeleton_transform_translation * float(min(h, w))
+        else:
+            max_translation = self.skeleton_transform_translation
+        if self.skeleton_transform_translation_limit is not None:
+            max_translation = min(max_translation, self.skeleton_transform_translation_limit)
+
+        tx = rng.uniform(-max_translation, max_translation)
+        ty = rng.uniform(-max_translation, max_translation)
+
         center = (w / 2.0, h / 2.0)
         matrix = cv.getRotationMatrix2D(center, angle, scale)
         matrix[0, 2] += tx
@@ -526,6 +588,8 @@ class CrackSkeletonDataset(Dataset):
         if coords.shape[0] == 0:
             return skeleton.astype(np.uint8)
         noise = rng.normal(0.0, self.skeleton_noise_std, size=coords.shape)
+        if self.skeleton_noise_limit is not None:
+            noise = np.clip(noise, -self.skeleton_noise_limit, self.skeleton_noise_limit)
         jittered = coords.astype(np.float32) + noise.astype(np.float32)
         jittered = np.round(jittered).astype(int)
         h, w = skeleton.shape
@@ -533,8 +597,9 @@ class CrackSkeletonDataset(Dataset):
         jittered[:, 1] = np.clip(jittered[:, 1], 0, w - 1)
         jitter_mask = np.zeros_like(skeleton, dtype=np.uint8)
         jitter_mask[jittered[:, 0], jittered[:, 1]] = 1
-        combined = np.maximum(skeleton.astype(np.uint8), jitter_mask)
-        return combined
+        if np.count_nonzero(jitter_mask) == 0:
+            return skeleton.astype(np.uint8)
+        return jitter_mask
 
     def _skeletonize(self, mask: np.ndarray) -> np.ndarray:
         skeleton = np.zeros_like(mask)
