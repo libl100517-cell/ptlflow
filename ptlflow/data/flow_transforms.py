@@ -646,12 +646,16 @@ class RandomFlip(object):
         if valid_keys is None:
             valid_keys = list(inputs.keys())
         for k in valid_keys:
+            value = inputs[k]
+            if not isinstance(value, torch.Tensor):
+                continue
             if ibatch is None:
-                inputs[k] = torch.flip(inputs[k], [iinp])
+                inputs[k] = torch.flip(value, [iinp])
                 if "flows" in k:
                     inputs[k][:, iflow] *= -1
             else:
-                inputs[k][ibatch] = torch.flip(inputs[k][ibatch], [iinp - 1])
+                value = torch.flip(value[ibatch], [iinp - 1])
+                inputs[k][ibatch] = value
                 if "flows" in k:
                     inputs[k][ibatch, iflow] *= -1
         return inputs
