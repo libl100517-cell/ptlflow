@@ -75,7 +75,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--root",
         type=Path,
-        required=True,
+        default='D:/GitHub/RPMNet-master/change_dataset/',
         help="Root directory containing crack mask images.",
     )
     parser.add_argument(
@@ -102,12 +102,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Optional RNG seed for reproducible sampling.",
     )
-    parser.add_argument(
-        "--patch-size",
-        type=int,
-        default=256,
-        help="Patch size passed to the dataset (set to 0 to disable).",
-    )
     return parser.parse_args(argv)
 
 
@@ -130,13 +124,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     output_dir = args.output
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    patch_size = args.patch_size if args.patch_size > 0 else None
-
     dataset = CrackSkeletonDataset(
         root_dir=str(args.root),
         split=args.split,
         rng_seed=args.seed,
-        skeleton_patch_size=patch_size,
     )
 
     sample_count = min(args.count, len(dataset))
